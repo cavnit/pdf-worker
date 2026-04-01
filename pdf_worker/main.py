@@ -57,7 +57,7 @@ async def process_pdf(
                 raw_text = page.get_text()
 
                 # Rasterise to PNG, downscale if exceeding Claude's 5MB limit
-                MAX_IMAGE_BYTES = 4_800_000  # stay under 5MB with margin
+                MAX_IMAGE_BYTES = 3_700_000  # base64 inflates ~33%, so 3.7MB raw ≈ 4.9MB encoded (under 5MB limit)
                 render_scale = scale
                 while True:
                     render_matrix = pymupdf.Matrix(render_scale, render_scale)
