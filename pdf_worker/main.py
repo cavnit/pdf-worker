@@ -3,6 +3,9 @@
 import base64
 import logging
 import tempfile
+from asyncio import get_event_loop
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 
 import pymupdf
@@ -11,6 +14,7 @@ from fastapi import FastAPI, Query, UploadFile
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="pdf-worker", version="0.1.0")
+_thread_pool = ThreadPoolExecutor()
 
 
 @app.get("/health")
@@ -19,33 +23,18 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/process")
-async def process_pdf(
-    file: UploadFile,
-    dpi: int = Query(default=200, ge=36, le=600),
-) -> dict:
-    """Process a PDF file: extract text, rasterise pages, gather metadata.
-
-    Args:
-        file: Uploaded PDF file.
-        dpi: Resolution for page rasterisation (default 200).
-
-    Returns:
-        JSON manifest with per-page metadata and base64-encoded PNG images.
-    """
+def _process_pdf_sync(pdf_bytes: bytes, dpi: int) -> dict:
+    """CPU-bound PDF processing — runs in a thread pool."""
     tmp_path: Path | None = None
 
     try:
-        # Write uploaded bytes to a temp file for PyMuPDF
-        content = await file.read()
         tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-        tmp.write(content)
+        tmp.write(pdf_bytes)
         tmp.close()
         tmp_path = Path(tmp.name)
 
         doc = pymupdf.open(str(tmp_path))
         scale = dpi / 72
-        matrix = pymupdf.Matrix(scale, scale)
 
         pages: list[dict] = []
 
@@ -133,6 +122,17 @@ async def process_pdf(
     finally:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/process")
+async def process_pdf(
+    file: UploadFile,
+    dpi: int = Query(default=200, ge=36, le=600),
+) -> dict:
+    """Process a PDF file: extract text, rasterise pages, gather metadata."""
+    content = await file.read()
+    loop = get_event_loop()
+    return await loop.run_in_executor(_thread_pool, partial(_process_pdf_sync, content, dpi))
 
 
 if __name__ == "__main__":
