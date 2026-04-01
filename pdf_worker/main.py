@@ -56,9 +56,20 @@ async def process_pdf(
                 # Extract raw text
                 raw_text = page.get_text()
 
-                # Rasterise to PNG
-                pix = page.get_pixmap(matrix=matrix)
-                png_bytes = pix.tobytes("png")
+                # Rasterise to PNG, downscale if exceeding Claude's 5MB limit
+                MAX_IMAGE_BYTES = 4_800_000  # stay under 5MB with margin
+                render_scale = scale
+                while True:
+                    render_matrix = pymupdf.Matrix(render_scale, render_scale)
+                    pix = page.get_pixmap(matrix=render_matrix)
+                    png_bytes = pix.tobytes("png")
+                    if len(png_bytes) <= MAX_IMAGE_BYTES or render_scale <= 1.0:
+                        break
+                    render_scale *= 0.75
+                    logger.info(
+                        "Page %d image too large (%d bytes), retrying at scale %.2f",
+                        page_number + 1, len(png_bytes), render_scale,
+                    )
                 image_b64 = base64.b64encode(png_bytes).decode("ascii")
 
                 # Page dimensions (in points)
