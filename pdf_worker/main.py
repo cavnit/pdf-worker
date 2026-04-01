@@ -56,20 +56,41 @@ async def process_pdf(
                 # Extract raw text
                 raw_text = page.get_text()
 
-                # Rasterise to PNG, downscale if exceeding Claude's 5MB limit
-                MAX_IMAGE_BYTES = 3_700_000  # base64 inflates ~33%, so 3.7MB raw ≈ 4.9MB encoded (under 5MB limit)
+                # Rasterise to PNG within Claude Vision API limits:
+                #   - Max 8000px on any dimension (we target 7500 for margin)
+                #   - Max 5MB base64-encoded (3.7MB raw ≈ 4.9MB encoded)
+                #   - Recommended: 1568px long side for best performance
+                MAX_DIMENSION = 7500
+                MAX_RAW_BYTES = 3_700_000
+
                 render_scale = scale
                 while True:
                     render_matrix = pymupdf.Matrix(render_scale, render_scale)
                     pix = page.get_pixmap(matrix=render_matrix)
+
+                    # Check dimension limit
+                    if pix.width > MAX_DIMENSION or pix.height > MAX_DIMENSION:
+                        long_side = max(pix.width, pix.height)
+                        render_scale *= MAX_DIMENSION / long_side
+                        logger.info(
+                            "Page %d exceeds %dpx (%dx%d), reducing scale to %.2f",
+                            page_number + 1, MAX_DIMENSION, pix.width, pix.height, render_scale,
+                        )
+                        continue
+
                     png_bytes = pix.tobytes("png")
-                    if len(png_bytes) <= MAX_IMAGE_BYTES or render_scale <= 1.0:
-                        break
-                    render_scale *= 0.75
-                    logger.info(
-                        "Page %d image too large (%d bytes), retrying at scale %.2f",
-                        page_number + 1, len(png_bytes), render_scale,
-                    )
+
+                    # Check file size limit
+                    if len(png_bytes) > MAX_RAW_BYTES and render_scale > 1.0:
+                        render_scale *= 0.75
+                        logger.info(
+                            "Page %d image too large (%d bytes), reducing scale to %.2f",
+                            page_number + 1, len(png_bytes), render_scale,
+                        )
+                        continue
+
+                    break
+
                 image_b64 = base64.b64encode(png_bytes).decode("ascii")
 
                 # Page dimensions (in points)
